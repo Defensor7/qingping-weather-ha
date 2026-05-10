@@ -298,7 +298,12 @@ def _is_night_hour(hour: int) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _hourly_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
+def _hourly_entry(
+    entry: dict[str, Any],
+    *,
+    fallback_humidity_pct: float | None,
+    fallback_pm25: float | None,
+) -> dict[str, Any] | None:
     dt = _parse_dt(entry.get("datetime"))
     if dt is None:
         return None
@@ -308,6 +313,15 @@ def _hourly_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
     skycon = _condition_to_skycon(entry.get("condition"), is_night=is_night)
     wind_speed = _hourly_forecast_to_kmh(entry)
     wind_bearing = entry.get("wind_bearing")
+
+    humidity_pct = entry.get("humidity")
+    if humidity_pct is None:
+        humidity_pct = fallback_humidity_pct
+
+    pm25_value = entry.get("pm25")
+    if pm25_value is None and fallback_pm25 is not None:
+        pm25_value = fallback_pm25
+
     return {
         "datetime": dt_str,
         "timestamp": timestamp,
@@ -329,23 +343,52 @@ def _hourly_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
         "humidity": {
             "datetime": dt_str,
             "timestamp": timestamp,
-            "value": _humidity_fraction(entry.get("humidity")),
+            "value": _humidity_fraction(humidity_pct),
         },
         "pm25": {
             "datetime": dt_str,
             "timestamp": timestamp,
-            "value": 0,
+            "value": int(round(_safe_float(pm25_value))),
         },
     }
 
 
+def _resolve_fallbacks(
+    hass: HomeAssistant,
+    weather_entity_id: str,
+    humidity_sensor: str | None,
+    pm25_sensor: str | None,
+) -> tuple[float | None, float | None]:
+    """Pick the best available current-value fallback for humidity & pm25.
+
+    Forecast entries from HA-YandexWeather (and similar) don't carry humidity
+    or pm25 — without a fallback we'd send 0 and the device draws an empty
+    chart. Priority: configured sensor > weather-entity attribute (humidity
+    only) > None.
+    """
+    sensor_humidity = _read_sensor_float(hass, humidity_sensor)
+    if sensor_humidity is None:
+        state = hass.states.get(weather_entity_id)
+        if state is not None:
+            attr = state.attributes.get(ATTR_WEATHER_HUMIDITY)
+            sensor_humidity = float(attr) if attr is not None else None
+
+    sensor_pm25 = _read_sensor_float(hass, pm25_sensor)
+    return sensor_humidity, sensor_pm25
+
+
 async def build_hourly_weather_forecast(
-    hass: HomeAssistant, weather_entity_id: str
+    hass: HomeAssistant,
+    weather_entity_id: str,
+    *,
+    humidity_sensor: str | None = None,
+    pm25_sensor: str | None = None,
 ) -> list[dict[str, Any]]:
     raw = await _fetch_forecast(hass, weather_entity_id, "hourly")
+    fb_hum, fb_pm25 = _resolve_fallbacks(hass, weather_entity_id, humidity_sensor, pm25_sensor)
     out: list[dict[str, Any]] = []
     for entry in raw:
-        result = _hourly_entry(entry)
+        result = _hourly_entry(entry, fallback_humidity_pct=fb_hum, fallback_pm25=fb_pm25)
         if result is not None:
             out.append(result)
     return out
@@ -368,6 +411,18 @@ def _most_common(values: Iterable[Any]) -> Any:
     if not items:
         return None
     return Counter(items).most_common(1)[0][0]
+
+
+def _agg_pm25(date_str: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+    nums = [_safe_float(e["pm25"]) for e in items if e.get("pm25") is not None]
+    if not nums:
+        return {"date": date_str, "max": 0, "min": 0, "avg": 0}
+    return {
+        "date": date_str,
+        "max": int(round(max(nums))),
+        "min": int(round(min(nums))),
+        "avg": int(round(sum(nums) / len(nums))),
+    }
 
 
 def _daily_buckets(
@@ -443,7 +498,7 @@ def _daily_entry(date_str: str, midnight_ts: int, items: list[dict[str, Any]]) -
             "min": round(h_min, 4),
             "avg": round(h_avg, 4),
         },
-        "pm25": {"date": date_str, "max": 0, "min": 0, "avg": 0},
+        "pm25": _agg_pm25(date_str, items),
     }
     octant = _bearing_to_octant16(avg_bearing)
     if octant is not None:
@@ -459,8 +514,30 @@ def _is_hourly_night(entry: dict[str, Any]) -> bool:
     return _is_night_hour(dt.hour)
 
 
+def _apply_fallbacks(
+    hourly_raw: list[dict[str, Any]],
+    fallback_humidity_pct: float | None,
+    fallback_pm25: float | None,
+) -> list[dict[str, Any]]:
+    if fallback_humidity_pct is None and fallback_pm25 is None:
+        return hourly_raw
+    out = []
+    for entry in hourly_raw:
+        patched = dict(entry)
+        if patched.get("humidity") is None and fallback_humidity_pct is not None:
+            patched["humidity"] = fallback_humidity_pct
+        if patched.get("pm25") is None and fallback_pm25 is not None:
+            patched["pm25"] = fallback_pm25
+        out.append(patched)
+    return out
+
+
 async def build_daily_weather_forecast(
-    hass: HomeAssistant, weather_entity_id: str
+    hass: HomeAssistant,
+    weather_entity_id: str,
+    *,
+    humidity_sensor: str | None = None,
+    pm25_sensor: str | None = None,
 ) -> list[dict[str, Any]]:
     """Aggregate the entity's hourly forecast into per-day entries.
 
@@ -471,6 +548,8 @@ async def build_daily_weather_forecast(
     hourly_raw = await _fetch_forecast(hass, weather_entity_id, "hourly")
     if not hourly_raw:
         return []
+    fb_hum, fb_pm25 = _resolve_fallbacks(hass, weather_entity_id, humidity_sensor, pm25_sensor)
+    hourly_raw = _apply_fallbacks(hourly_raw, fb_hum, fb_pm25)
     return [
         _daily_entry(date_str, ts, items)
         for date_str, ts, items in _daily_buckets(hourly_raw)

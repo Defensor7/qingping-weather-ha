@@ -98,7 +98,10 @@ class QinpingDailyForecastsView(_ProxyableView):
         metric = request.query.get("metric", "weather")
         if metric == "weather":
             data = await build_daily_weather_forecast(
-                self._hass, self._state["weather_entity_id"]
+                self._hass,
+                self._state["weather_entity_id"],
+                humidity_sensor=self._build_kwargs.get("humidity_sensor"),
+                pm25_sensor=self._build_kwargs.get("pm25_sensor"),
             )
         else:
             data = []
@@ -113,7 +116,10 @@ class QinpingHourlyForecastsView(_ProxyableView):
         metric = request.query.get("metric", "weather")
         if metric == "weather":
             data = await build_hourly_weather_forecast(
-                self._hass, self._state["weather_entity_id"]
+                self._hass,
+                self._state["weather_entity_id"],
+                humidity_sensor=self._build_kwargs.get("humidity_sensor"),
+                pm25_sensor=self._build_kwargs.get("pm25_sensor"),
             )
         else:
             data = []
