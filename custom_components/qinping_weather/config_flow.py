@@ -6,26 +6,19 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
-from homeassistant.const import CONF_PORT
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
     EntitySelector,
     EntitySelectorConfig,
-    NumberSelector,
-    NumberSelectorConfig,
-    NumberSelectorMode,
     TextSelector,
 )
 
 from .const import (
-    CONF_BIND_HOST,
     CONF_CITY_ID,
     CONF_STATION_NAME,
     CONF_TIMEZONE,
     CONF_WEATHER_ENTITY,
-    DEFAULT_BIND_HOST,
     DEFAULT_CITY_ID,
-    DEFAULT_PORT,
     DEFAULT_STATION_NAME,
     DOMAIN,
 )
@@ -38,16 +31,6 @@ def _build_schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_WEATHER_ENTITY,
                 default=defaults.get(CONF_WEATHER_ENTITY),
             ): EntitySelector(EntitySelectorConfig(domain="weather")),
-            vol.Required(
-                CONF_PORT,
-                default=defaults.get(CONF_PORT, DEFAULT_PORT),
-            ): NumberSelector(
-                NumberSelectorConfig(min=1, max=65535, step=1, mode=NumberSelectorMode.BOX)
-            ),
-            vol.Optional(
-                CONF_BIND_HOST,
-                default=defaults.get(CONF_BIND_HOST, DEFAULT_BIND_HOST),
-            ): TextSelector(),
             vol.Optional(
                 CONF_STATION_NAME,
                 default=defaults.get(CONF_STATION_NAME, DEFAULT_STATION_NAME),
@@ -70,16 +53,12 @@ class QinpingConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> Any:
-        errors: dict[str, str] = {}
+        if self._async_current_entries():
+            return self.async_abort(reason="single_instance_allowed")
 
         if user_input is not None:
-            user_input[CONF_PORT] = int(user_input[CONF_PORT])
             if not user_input.get(CONF_TIMEZONE):
                 user_input[CONF_TIMEZONE] = self.hass.config.time_zone or "UTC"
-            await self.async_set_unique_id(
-                f"{user_input[CONF_BIND_HOST]}:{user_input[CONF_PORT]}"
-            )
-            self._abort_if_unique_id_configured()
             return self.async_create_entry(
                 title=f"Qinping ({user_input[CONF_STATION_NAME]})",
                 data=user_input,
@@ -88,7 +67,6 @@ class QinpingConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user",
             data_schema=_build_schema({}),
-            errors=errors,
         )
 
     @staticmethod
@@ -105,7 +83,6 @@ class QinpingOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> Any:
         if user_input is not None:
-            user_input[CONF_PORT] = int(user_input[CONF_PORT])
             if not user_input.get(CONF_TIMEZONE):
                 user_input[CONF_TIMEZONE] = self.hass.config.time_zone or "UTC"
             self.hass.config_entries.async_update_entry(
