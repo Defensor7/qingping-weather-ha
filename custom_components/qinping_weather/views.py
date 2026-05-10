@@ -24,7 +24,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
-from .proxy import log_local_dispatch, proxy_request
+from .proxy import log_local_dispatch, log_local_response, proxy_request
 from .transformer import (
     build_daily_weather_forecast,
     build_hourly_weather_forecast,
@@ -64,7 +64,9 @@ class _ProxyableView(_QinpingViewBase):
         if self._proxy_all:
             return await proxy_request(self._hass, request)
         log_local_dispatch(self.name, request)
-        return await self._local(request)
+        response = await self._local(request)
+        log_local_response(self.name, response)
+        return response
 
     async def _local(self, request: web.Request) -> web.Response:  # pragma: no cover
         raise NotImplementedError
@@ -152,7 +154,9 @@ class QinpingFirmwareView(_QinpingViewBase):
         if self._forward_firmware:
             return await proxy_request(self._hass, request)
         log_local_dispatch(self.name, request)
-        return web.json_response({"data": {"upgrade_sign": 0}, "code": 0})
+        response = web.json_response({"data": {"upgrade_sign": 0}, "code": 0})
+        log_local_response(self.name, response)
+        return response
 
 
 ALL_VIEW_CLASSES: tuple[type[_QinpingViewBase], ...] = (

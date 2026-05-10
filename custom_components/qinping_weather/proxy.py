@@ -157,3 +157,20 @@ async def proxy_request(hass: HomeAssistant, request: web.Request) -> web.Respon
 def log_local_dispatch(view_name: str, request: web.Request) -> None:
     """Log a local-render dispatch (called from views when proxy_mode is off)."""
     _LOGGER.debug("local %s %s%s", request.method, view_name, request.rel_url)
+
+
+def log_local_response(view_name: str, response: web.Response) -> None:
+    """Dump body of a locally-rendered response when DEBUG is enabled."""
+    if not _LOGGER.isEnabledFor(logging.DEBUG):
+        return
+    body = response.body
+    if isinstance(body, (bytes, bytearray)):
+        size = len(body)
+        try:
+            preview = bytes(body[:_BODY_PREVIEW]).decode("utf-8")
+        except UnicodeDecodeError:
+            preview = repr(bytes(body[:_BODY_PREVIEW]))
+    else:
+        size = -1
+        preview = str(body)[:_BODY_PREVIEW]
+    _LOGGER.debug("local %s response (%dB): %s", view_name, size, preview)

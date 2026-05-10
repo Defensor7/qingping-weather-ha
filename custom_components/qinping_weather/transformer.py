@@ -62,8 +62,10 @@ _CARDINALS = [
 
 
 def _bearing_to_cardinal(bearing: float | None) -> str:
+    # Real upstream always sends a valid cardinal like "ESE"; the device's
+    # parser appears not to tolerate non-cardinal strings, so fall back to "N".
     if bearing is None:
-        return "N/A"
+        return "N"
     return _CARDINALS[int((bearing % 360) / 22.5)]
 
 
