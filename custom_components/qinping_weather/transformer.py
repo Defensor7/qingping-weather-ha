@@ -73,6 +73,80 @@ def _read_sensor_float(hass: HomeAssistant, entity_id: str | None) -> float | No
         return None
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value) if value is not None else default
+    except (ValueError, TypeError):
+        return default
+
+
+async def _fetch_forecast(
+    hass: HomeAssistant, weather_entity_id: str, forecast_type: str
+) -> list[dict[str, Any]]:
+    """Call the weather.get_forecasts service and unwrap its response."""
+    try:
+        response = await hass.services.async_call(
+            "weather",
+            "get_forecasts",
+            {"entity_id": weather_entity_id, "type": forecast_type},
+            blocking=True,
+            return_response=True,
+        )
+    except Exception:  # pragma: no cover - HA service errors propagate as 500
+        return []
+    if not response:
+        return []
+    entity_response = response.get(weather_entity_id) or {}
+    return list(entity_response.get("forecast") or [])
+
+
+def _forecast_entry_weather(fc: dict[str, Any], ultraviolet: int) -> dict[str, Any]:
+    condition = fc.get("condition") or ""
+    temp_high = _safe_float(fc.get("temperature"))
+    temp_low = _safe_float(fc.get("templow"), default=temp_high)
+    humidity = _safe_float(fc.get("humidity"))
+    wind_speed = _safe_float(fc.get("wind_speed"))
+    wind_bearing = fc.get("wind_bearing")
+    probability = _safe_float(fc.get("precipitation_probability"))
+
+    return {
+        "date": fc.get("datetime", ""),
+        "skycon": _HA_TO_SKYCON.get(condition, "CLEAR_DAY"),
+        "temp_max": temp_high,
+        "temp_min": temp_low,
+        "humidity": int(round(humidity)),
+        "probability": int(round(probability)),
+        "ultraviolet": ultraviolet,
+        "wind": {
+            "speed": round(wind_speed, 2),
+            "wind_dir": _bearing_to_cardinal(wind_bearing),
+            "wind_level": int(wind_speed / 5),
+        },
+    }
+
+
+async def build_weather_forecast(
+    hass: HomeAssistant,
+    weather_entity_id: str,
+    forecast_type: str,
+    *,
+    uv_sensor: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return a list of forecast entries in Qinping shape (top-level array)."""
+    forecasts = await _fetch_forecast(hass, weather_entity_id, forecast_type)
+    uv_value = _read_sensor_float(hass, uv_sensor)
+    ultraviolet = int(round(uv_value)) if uv_value is not None else 0
+    return [_forecast_entry_weather(fc, ultraviolet) for fc in forecasts]
+
+
+def build_aqi_forecast_placeholder() -> list[dict[str, Any]]:
+    """No AQI source wired up yet — return empty array.
+
+    The device tolerates an empty top-level array (graphs just have no points).
+    """
+    return []
+
+
 def build_payloads(
     hass: HomeAssistant,
     weather_entity_id: str,

@@ -1,12 +1,18 @@
 """HTTP views that imitate the Qinping cloud endpoints.
 
-These are registered on Home Assistant's existing HTTP server. TLS is expected
-to be terminated by an upstream reverse proxy (e.g. the NGINX Proxy add-on with
-a customize.servers block matching `qing.cleargrass.com`).
+Registered on Home Assistant's existing HTTP server. TLS is expected to be
+terminated by an upstream reverse proxy (e.g. the NGINX Proxy add-on with a
+customize.servers block matching `qing.cleargrass.com`).
 
-Each view reads the current option dict from hass.data on every request so an
-options-flow update takes effect without re-registering routes (HA HTTP has no
-public unregister API).
+Endpoint shapes are based on:
+- ea/cgs2_decloud weather_server.py for /daily/weatherNow, /daily/locate,
+  /device/pairStatus, /cooperation/companies, /firmware/checkUpdate;
+- reverse-engineered LocationAPI::request{Weather,AQI}{FD,FH}List paths for
+  /daily/dailyForecasts and /daily/hourlyForecasts (top-level QJsonArray
+  response, dispatched by the `metric` query parameter).
+
+Each view reads live options from hass.data on every request so an
+options-flow update takes effect without re-registering routes.
 """
 from __future__ import annotations
 
@@ -18,7 +24,11 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
-from .transformer import build_payloads
+from .transformer import (
+    build_aqi_forecast_placeholder,
+    build_payloads,
+    build_weather_forecast,
+)
 
 
 class _QinpingViewBase(HomeAssistantView):
@@ -28,9 +38,9 @@ class _QinpingViewBase(HomeAssistantView):
     def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
 
-    def _build(self) -> tuple[dict[str, Any], dict[str, Any]]:
-        options: dict[str, Any] = self._hass.data[DOMAIN]["options"]
-        return build_payloads(self._hass, **options)
+    @property
+    def _options(self) -> dict[str, Any]:
+        return self._hass.data[DOMAIN]["options"]
 
 
 class QinpingLocateView(_QinpingViewBase):
@@ -38,7 +48,7 @@ class QinpingLocateView(_QinpingViewBase):
     name = "qinping:locate"
 
     async def get(self, request: web.Request) -> web.Response:
-        _, location = self._build()
+        _, location = build_payloads(self._hass, **self._options)
         return web.json_response({"data": location, "code": 0})
 
 
@@ -47,8 +57,38 @@ class QinpingWeatherNowView(_QinpingViewBase):
     name = "qinping:weather_now"
 
     async def get(self, request: web.Request) -> web.Response:
-        weather, _ = self._build()
+        weather, _ = build_payloads(self._hass, **self._options)
         return web.json_response({"code": 0, "data": weather})
+
+
+class _QinpingForecastView(_QinpingViewBase):
+    forecast_type: str = ""
+
+    async def get(self, request: web.Request) -> web.Response:
+        metric = request.query.get("metric", "weather")
+        if metric == "weather":
+            options = self._options
+            data = await build_weather_forecast(
+                self._hass,
+                options["weather_entity_id"],
+                self.forecast_type,
+                uv_sensor=options.get("uv_sensor"),
+            )
+        else:  # aqi or aqi_us
+            data = build_aqi_forecast_placeholder()
+        return web.json_response(data)
+
+
+class QinpingDailyForecastsView(_QinpingForecastView):
+    url = "/daily/dailyForecasts"
+    name = "qinping:daily_forecasts"
+    forecast_type = "daily"
+
+
+class QinpingHourlyForecastsView(_QinpingForecastView):
+    url = "/daily/hourlyForecasts"
+    name = "qinping:hourly_forecasts"
+    forecast_type = "hourly"
 
 
 class QinpingPairStatusView(_QinpingViewBase):
@@ -78,6 +118,8 @@ class QinpingFirmwareView(_QinpingViewBase):
 ALL_VIEW_CLASSES: tuple[type[_QinpingViewBase], ...] = (
     QinpingLocateView,
     QinpingWeatherNowView,
+    QinpingDailyForecastsView,
+    QinpingHourlyForecastsView,
     QinpingPairStatusView,
     QinpingCooperationView,
     QinpingFirmwareView,
