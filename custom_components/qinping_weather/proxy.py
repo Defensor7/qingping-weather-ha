@@ -44,7 +44,7 @@ _RESP_STRIP = {
     "keep-alive",
 }
 
-_BODY_PREVIEW = 600
+_BODY_PREVIEW = 16000
 
 
 def _redact(headers: dict[str, str]) -> dict[str, str]:
