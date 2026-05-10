@@ -9,6 +9,7 @@ is plain JSON we don't have to decompress.
 from __future__ import annotations
 
 import logging
+import time
 
 from aiohttp import ClientError, ClientTimeout, web
 
@@ -20,6 +21,9 @@ _LOGGER = logging.getLogger(__name__)
 UPSTREAM_BASE = "https://qing.cleargrass.com"
 UPSTREAM_HOST = "qing.cleargrass.com"
 
+# Headers we never forward upstream (hop-by-hop or HA-injected proxy hints).
+# Note `host` is excluded so aiohttp can set it itself from the URL — setting
+# it explicitly causes some aiohttp versions to complain.
 _REQ_STRIP = {
     "host",
     "content-length",
@@ -40,6 +44,18 @@ _RESP_STRIP = {
     "keep-alive",
 }
 
+_BODY_PREVIEW = 600
+
+
+def _redact(headers: dict[str, str]) -> dict[str, str]:
+    out = {}
+    for k, v in headers.items():
+        if k.lower() in ("app-sign",):
+            out[k] = (v[:6] + "…") if v else v
+        else:
+            out[k] = v
+    return out
+
 
 async def proxy_request(hass: HomeAssistant, request: web.Request) -> web.Response:
     """Forward `request` to the real upstream and return its response."""
@@ -50,9 +66,26 @@ async def proxy_request(hass: HomeAssistant, request: web.Request) -> web.Respon
     headers = {
         k: v for k, v in request.headers.items() if k.lower() not in _REQ_STRIP
     }
-    headers["Host"] = UPSTREAM_HOST
     headers["Accept-Encoding"] = "identity"
 
+    _LOGGER.info(
+        "proxy -> %s %s%s (body %dB)",
+        request.method,
+        UPSTREAM_HOST,
+        request.rel_url,
+        len(body),
+    )
+    if _LOGGER.isEnabledFor(logging.DEBUG):
+        _LOGGER.debug("proxy req headers: %s", _redact(headers))
+        if body:
+            preview = body[:_BODY_PREVIEW]
+            try:
+                preview_str = preview.decode("utf-8", errors="replace")
+            except Exception:  # pragma: no cover
+                preview_str = repr(preview)
+            _LOGGER.debug("proxy req body preview: %s", preview_str)
+
+    started = time.monotonic()
     try:
         async with session.request(
             request.method,
@@ -63,13 +96,26 @@ async def proxy_request(hass: HomeAssistant, request: web.Request) -> web.Respon
             allow_redirects=False,
         ) as upstream:
             payload = await upstream.read()
-            _LOGGER.debug(
-                "proxy %s %s -> %s (%dB)",
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            _LOGGER.info(
+                "proxy <- %s %d (%dB, %dms) for %s",
                 request.method,
-                request.rel_url,
                 upstream.status,
                 len(payload),
+                elapsed_ms,
+                request.rel_url,
             )
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                _LOGGER.debug(
+                    "proxy resp headers: %s", dict(upstream.headers)
+                )
+                preview = payload[:_BODY_PREVIEW]
+                try:
+                    preview_str = preview.decode("utf-8", errors="replace")
+                except Exception:  # pragma: no cover
+                    preview_str = repr(preview)
+                _LOGGER.debug("proxy resp body preview: %s", preview_str)
+
             response_headers = {
                 k: v
                 for k, v in upstream.headers.items()
@@ -81,7 +127,33 @@ async def proxy_request(hass: HomeAssistant, request: web.Request) -> web.Respon
                 headers=response_headers,
             )
     except ClientError as err:
-        _LOGGER.warning("proxy upstream error for %s: %s", request.rel_url, err)
-        return web.json_response(
-            {"error": "upstream_failed", "detail": str(err)}, status=502
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        _LOGGER.warning(
+            "proxy upstream error after %dms for %s %s: %s: %s",
+            elapsed_ms,
+            request.method,
+            request.rel_url,
+            type(err).__name__,
+            err,
         )
+        return web.json_response(
+            {"error": "upstream_failed", "detail": f"{type(err).__name__}: {err}"},
+            status=502,
+        )
+    except Exception as err:  # pragma: no cover - last resort
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        _LOGGER.exception(
+            "proxy unexpected error after %dms for %s %s",
+            elapsed_ms,
+            request.method,
+            request.rel_url,
+        )
+        return web.json_response(
+            {"error": "proxy_internal", "detail": f"{type(err).__name__}: {err}"},
+            status=502,
+        )
+
+
+def log_local_dispatch(view_name: str, request: web.Request) -> None:
+    """Log a local-render dispatch (called from views when proxy_mode is off)."""
+    _LOGGER.debug("local %s %s%s", request.method, view_name, request.rel_url)

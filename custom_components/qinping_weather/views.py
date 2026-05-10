@@ -24,7 +24,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
-from .proxy import proxy_request
+from .proxy import log_local_dispatch, proxy_request
 from .transformer import (
     build_daily_weather_forecast,
     build_hourly_weather_forecast,
@@ -63,6 +63,7 @@ class _ProxyableView(_QinpingViewBase):
     async def get(self, request: web.Request) -> web.Response:
         if self._proxy_all:
             return await proxy_request(self._hass, request)
+        log_local_dispatch(self.name, request)
         return await self._local(request)
 
     async def _local(self, request: web.Request) -> web.Response:  # pragma: no cover
@@ -150,6 +151,7 @@ class QinpingFirmwareView(_QinpingViewBase):
     async def get(self, request: web.Request) -> web.Response:
         if self._forward_firmware:
             return await proxy_request(self._hass, request)
+        log_local_dispatch(self.name, request)
         return web.json_response({"data": {"upgrade_sign": 0}, "code": 0})
 
 
