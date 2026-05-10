@@ -1,4 +1,4 @@
-"""Build Qinping cloud-format JSON payloads from a Home Assistant weather entity.
+"""Build Qinping cloud-format JSON payloads from HA state.
 
 Output shape mirrors ea/cgs2_decloud weather_server.py so the device accepts it
 unchanged.
@@ -10,7 +10,6 @@ from typing import Any
 
 from homeassistant.components.weather import (
     ATTR_WEATHER_HUMIDITY,
-    ATTR_WEATHER_PRESSURE,
     ATTR_WEATHER_TEMPERATURE,
     ATTR_WEATHER_WIND_BEARING,
     ATTR_WEATHER_WIND_SPEED,
@@ -62,6 +61,18 @@ def _wind_speed_kmh(state: State) -> float:
         return 0.0
 
 
+def _read_sensor_float(hass: HomeAssistant, entity_id: str | None) -> float | None:
+    if not entity_id:
+        return None
+    state = hass.states.get(entity_id)
+    if state is None or state.state in (None, "", "unknown", "unavailable"):
+        return None
+    try:
+        return float(state.state)
+    except (ValueError, TypeError):
+        return None
+
+
 def build_payloads(
     hass: HomeAssistant,
     weather_entity_id: str,
@@ -69,16 +80,19 @@ def build_payloads(
     station_name: str,
     city_id: str,
     timezone: str,
+    uv_sensor: str | None = None,
+    aqi_sensor: str | None = None,
+    humidity_sensor: str | None = None,
+    pm25_sensor: str | None = None,
+    pm10_sensor: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return (weather_payload, location_payload) wrapped to match cgs2_decloud."""
 
     state = hass.states.get(weather_entity_id)
 
     if state is None:
-        # Source entity missing — return zeroed but well-formed structures so
-        # the device doesn't crash on its side.
         temperature = 0.0
-        humidity = 0
+        humidity_from_weather: float | None = None
         wind_speed = 0.0
         wind_bearing: float | None = None
         skycon = "CLEAR_DAY"
@@ -87,12 +101,31 @@ def build_payloads(
         temperature = float(temp_attr) if temp_attr is not None else 0.0
 
         humidity_attr = state.attributes.get(ATTR_WEATHER_HUMIDITY)
-        humidity = int(round(float(humidity_attr))) if humidity_attr is not None else 0
+        humidity_from_weather = (
+            float(humidity_attr) if humidity_attr is not None else None
+        )
 
         wind_speed = _wind_speed_kmh(state)
         wind_bearing = state.attributes.get(ATTR_WEATHER_WIND_BEARING)
 
         skycon = _HA_TO_SKYCON.get(state.state, "CLEAR_DAY")
+
+    humidity_override = _read_sensor_float(hass, humidity_sensor)
+    humidity_value = humidity_override if humidity_override is not None else humidity_from_weather
+    humidity = int(round(humidity_value)) if humidity_value is not None else 0
+
+    uv_value = _read_sensor_float(hass, uv_sensor)
+    ultraviolet = int(round(uv_value)) if uv_value is not None else 0
+
+    aqi_value = _read_sensor_float(hass, aqi_sensor)
+    aqi = int(round(aqi_value)) if aqi_value is not None else 0
+    no_aqi = aqi_value is None
+
+    pm25_value = _read_sensor_float(hass, pm25_sensor)
+    pm25 = int(round(pm25_value)) if pm25_value is not None else 0
+
+    pm10_value = _read_sensor_float(hass, pm10_sensor)
+    pm10 = int(round(pm10_value)) if pm10_value is not None else 0
 
     latitude = str(hass.config.latitude)
     longitude = str(hass.config.longitude)
@@ -136,21 +169,21 @@ def build_payloads(
         },
         "city_id": city_id,
         "weather": {
-            "aqi": 0,
-            "aqi_day_max_cn": 0,
-            "aqi_day_max_en": 0,
-            "aqi_day_min_cn": 0,
-            "aqi_day_min_en": 0,
-            "aqi_us": 0,
+            "aqi": aqi,
+            "aqi_day_max_cn": aqi,
+            "aqi_day_max_en": aqi,
+            "aqi_day_min_cn": aqi,
+            "aqi_day_min_en": aqi,
+            "aqi_us": aqi,
             "co": 0.0,
             "co_us": 0.0,
             "no2": 0,
             "no2_us": 0,
-            "noAqi": True,
+            "noAqi": no_aqi,
             "o3": 0,
             "o3_us": 0.0,
-            "pm10": 0,
-            "pm25": 0,
+            "pm10": pm10,
+            "pm25": pm25,
             "so2": 0,
             "so2_us": 0,
             "humidity": humidity,
@@ -160,7 +193,7 @@ def build_payloads(
             "temp_max": temperature,
             "temp_min": temperature,
             "temperature": temperature,
-            "ultraviolet": 0,
+            "ultraviolet": ultraviolet,
             "vehicle_limit": {"type": "city_unlimited"},
             "wind": {
                 "speed": round(wind_speed, 2),

@@ -4,9 +4,9 @@ These are registered on Home Assistant's existing HTTP server. TLS is expected
 to be terminated by an upstream reverse proxy (e.g. the NGINX Proxy add-on with
 a customize.servers block matching `qing.cleargrass.com`).
 
-Paths and JSON shapes are kept byte-compatible with ea/cgs2_decloud's
-weather_server.py so existing /etc/hosts redirection on the device works
-unchanged.
+Each view reads the current option dict from hass.data on every request so an
+options-flow update takes effect without re-registering routes (HA HTTP has no
+public unregister API).
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
+from .const import DOMAIN
 from .transformer import build_payloads
 
 
@@ -24,29 +25,12 @@ class _QinpingViewBase(HomeAssistantView):
     requires_auth = False
     cors_allowed = True
 
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        *,
-        weather_entity: str,
-        station_name: str,
-        city_id: str,
-        timezone: str,
-    ) -> None:
+    def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
-        self._weather_entity = weather_entity
-        self._station_name = station_name
-        self._city_id = city_id
-        self._timezone = timezone
 
     def _build(self) -> tuple[dict[str, Any], dict[str, Any]]:
-        return build_payloads(
-            self._hass,
-            self._weather_entity,
-            station_name=self._station_name,
-            city_id=self._city_id,
-            timezone=self._timezone,
-        )
+        options: dict[str, Any] = self._hass.data[DOMAIN]["options"]
+        return build_payloads(self._hass, **options)
 
 
 class QinpingLocateView(_QinpingViewBase):

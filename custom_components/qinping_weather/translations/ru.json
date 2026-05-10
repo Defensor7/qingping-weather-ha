@@ -8,7 +8,12 @@
           "weather_entity": "Источник погоды (weather entity)",
           "station_name": "Название станции на устройстве",
           "city_id": "City ID (косметическое)",
-          "timezone": "Часовой пояс (пусто = из HA)"
+          "timezone": "Часовой пояс (пусто = из HA)",
+          "uv_sensor": "Сенсор УФ-индекса (опционально)",
+          "aqi_sensor": "Сенсор AQI / ИКВ (опционально)",
+          "humidity_sensor": "Сенсор влажности (опционально, переопределяет weather)",
+          "pm25_sensor": "Сенсор PM2.5 (опционально)",
+          "pm10_sensor": "Сенсор PM10 (опционально)"
         }
       }
     },
@@ -24,7 +29,12 @@
           "weather_entity": "Источник погоды (weather entity)",
           "station_name": "Название станции",
           "city_id": "City ID",
-          "timezone": "Часовой пояс"
+          "timezone": "Часовой пояс",
+          "uv_sensor": "Сенсор УФ-индекса",
+          "aqi_sensor": "Сенсор AQI / ИКВ",
+          "humidity_sensor": "Сенсор влажности",
+          "pm25_sensor": "Сенсор PM2.5",
+          "pm10_sensor": "Сенсор PM10"
         }
       }
     }
