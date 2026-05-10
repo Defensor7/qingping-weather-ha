@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import Counter
+from datetime import timedelta, timezone
 from typing import Any, Iterable
 
 from homeassistant.components.weather import (
@@ -30,6 +31,12 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import SpeedConverter
 
 _LOGGER = logging.getLogger(__name__)
+
+# Qinping's cloud renders all human-readable datetime strings in Beijing time
+# (UTC+8) regardless of the device's app-timezone header. The device's parser
+# appears to assume the same convention; mismatched local time strings make
+# the forecast UI throw an error. Timestamps stay unix-epoch (TZ-agnostic).
+DEVICE_TZ = timezone(timedelta(hours=8))
 
 # Caiyun-style condition codes the QingSnow2App expects.
 _HA_TO_SKYCON: dict[str, str] = {
@@ -269,7 +276,7 @@ def _parse_dt(s: str | None):
     parsed = dt_util.parse_datetime(s)
     if parsed is None:
         return None
-    return dt_util.as_local(parsed)
+    return parsed.astimezone(DEVICE_TZ)
 
 
 def _hourly_forecast_to_kmh(entry: dict[str, Any]) -> float:
@@ -562,9 +569,10 @@ async def build_daily_weather_forecast(
 
 
 def build_server_now() -> dict[str, Any]:
-    """Body for /daily/now: server time string + unix ts. Matches upstream format."""
-    now = dt_util.now()
+    """Body for /daily/now: server time string + unix ts. Matches upstream format
+    (string in Beijing time, timestamp in unix epoch)."""
+    now_utc = dt_util.utcnow()
     return {
-        "time": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "timestamp": int(now.timestamp()),
+        "time": now_utc.astimezone(DEVICE_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp": int(now_utc.timestamp()),
     }
