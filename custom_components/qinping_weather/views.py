@@ -4,12 +4,15 @@ Registered on Home Assistant's existing HTTP server. TLS is expected to be
 terminated by an upstream reverse proxy (e.g. the NGINX Proxy add-on with a
 customize.servers block matching `qing.cleargrass.com`).
 
-Endpoint shapes are pinned to the live qing.cleargrass.com responses captured
-via debug/qinping_capture.py --proxy. All weather-data endpoints (incl.
-forecasts) are wrapped as {"code":0, "data":<payload>}.
+Behavior flags read live from hass.data[DOMAIN]:
 
-Each view reads live options from hass.data on every request so an
-options-flow update takes effect without re-registering routes.
+  proxy_mode             -> when True, every weather/AQI/locate/now/pair/
+                            cooperation endpoint is forwarded 1:1 to the real
+                            qing.cleargrass.com (signing stays valid since the
+                            device's headers are passed through).
+  forward_firmware_check -> when True, /firmware/checkUpdate is forwarded
+                            (independent of proxy_mode). When False, returns
+                            a stub "no update" response.
 """
 from __future__ import annotations
 
@@ -21,6 +24,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
+from .proxy import proxy_request
 from .transformer import (
     build_daily_weather_forecast,
     build_hourly_weather_forecast,
@@ -37,88 +41,115 @@ class _QinpingViewBase(HomeAssistantView):
         self._hass = hass
 
     @property
-    def _options(self) -> dict[str, Any]:
-        return self._hass.data[DOMAIN]["options"]
+    def _state(self) -> dict[str, Any]:
+        return self._hass.data[DOMAIN]
+
+    @property
+    def _build_kwargs(self) -> dict[str, Any]:
+        return self._state["build_kwargs"]
+
+    @property
+    def _proxy_all(self) -> bool:
+        return bool(self._state.get("proxy_mode"))
+
+    @property
+    def _forward_firmware(self) -> bool:
+        return bool(self._state.get("forward_firmware_check"))
 
 
-class QinpingLocateView(_QinpingViewBase):
+class _ProxyableView(_QinpingViewBase):
+    """Mixin: when proxy_mode is on, forward; otherwise call subclass _local."""
+
+    async def get(self, request: web.Request) -> web.Response:
+        if self._proxy_all:
+            return await proxy_request(self._hass, request)
+        return await self._local(request)
+
+    async def _local(self, request: web.Request) -> web.Response:  # pragma: no cover
+        raise NotImplementedError
+
+
+class QinpingLocateView(_ProxyableView):
     url = "/daily/locate"
     name = "qinping:locate"
 
-    async def get(self, request: web.Request) -> web.Response:
-        _, location = build_payloads(self._hass, **self._options)
+    async def _local(self, request: web.Request) -> web.Response:
+        _, location = build_payloads(self._hass, **self._build_kwargs)
         return web.json_response({"data": location, "code": 0})
 
 
-class QinpingWeatherNowView(_QinpingViewBase):
+class QinpingWeatherNowView(_ProxyableView):
     url = "/daily/weatherNow"
     name = "qinping:weather_now"
 
-    async def get(self, request: web.Request) -> web.Response:
-        weather, _ = build_payloads(self._hass, **self._options)
+    async def _local(self, request: web.Request) -> web.Response:
+        weather, _ = build_payloads(self._hass, **self._build_kwargs)
         return web.json_response({"code": 0, "data": weather})
 
 
-class QinpingDailyForecastsView(_QinpingViewBase):
+class QinpingDailyForecastsView(_ProxyableView):
     url = "/daily/dailyForecasts"
     name = "qinping:daily_forecasts"
 
-    async def get(self, request: web.Request) -> web.Response:
+    async def _local(self, request: web.Request) -> web.Response:
         metric = request.query.get("metric", "weather")
         if metric == "weather":
             data = await build_daily_weather_forecast(
-                self._hass, self._options["weather_entity_id"]
-            )
-        else:  # aqi / aqi_us — upstream itself returns empty for unsourced cities
-            data = []
-        return web.json_response({"code": 0, "data": data})
-
-
-class QinpingHourlyForecastsView(_QinpingViewBase):
-    url = "/daily/hourlyForecasts"
-    name = "qinping:hourly_forecasts"
-
-    async def get(self, request: web.Request) -> web.Response:
-        metric = request.query.get("metric", "weather")
-        if metric == "weather":
-            data = await build_hourly_weather_forecast(
-                self._hass, self._options["weather_entity_id"]
+                self._hass, self._state["weather_entity_id"]
             )
         else:
             data = []
         return web.json_response({"code": 0, "data": data})
 
 
-class QinpingNowView(_QinpingViewBase):
+class QinpingHourlyForecastsView(_ProxyableView):
+    url = "/daily/hourlyForecasts"
+    name = "qinping:hourly_forecasts"
+
+    async def _local(self, request: web.Request) -> web.Response:
+        metric = request.query.get("metric", "weather")
+        if metric == "weather":
+            data = await build_hourly_weather_forecast(
+                self._hass, self._state["weather_entity_id"]
+            )
+        else:
+            data = []
+        return web.json_response({"code": 0, "data": data})
+
+
+class QinpingNowView(_ProxyableView):
     """/daily/now -> server time. Device polls this for clock sync."""
     url = "/daily/now"
     name = "qinping:now"
 
-    async def get(self, request: web.Request) -> web.Response:
+    async def _local(self, request: web.Request) -> web.Response:
         return web.json_response({"code": 0, "data": build_server_now()})
 
 
-class QinpingPairStatusView(_QinpingViewBase):
+class QinpingPairStatusView(_ProxyableView):
     url = "/device/pairStatus"
     name = "qinping:pair_status"
 
-    async def get(self, request: web.Request) -> web.Response:
+    async def _local(self, request: web.Request) -> web.Response:
         return web.json_response({"desc": "ok", "code": 10503})
 
 
-class QinpingCooperationView(_QinpingViewBase):
+class QinpingCooperationView(_ProxyableView):
     url = "/cooperation/companies"
     name = "qinping:cooperation"
 
-    async def get(self, request: web.Request) -> web.Response:
+    async def _local(self, request: web.Request) -> web.Response:
         return web.json_response({"data": {"cooperation": ["private"]}, "code": 1})
 
 
 class QinpingFirmwareView(_QinpingViewBase):
+    """Firmware check is gated by its own flag, not proxy_mode."""
     url = "/firmware/checkUpdate"
     name = "qinping:firmware"
 
     async def get(self, request: web.Request) -> web.Response:
+        if self._forward_firmware:
+            return await proxy_request(self._hass, request)
         return web.json_response({"data": {"upgrade_sign": 0}, "code": 0})
 
 

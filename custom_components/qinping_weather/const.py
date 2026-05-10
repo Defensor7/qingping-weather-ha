@@ -14,6 +14,9 @@ CONF_HUMIDITY_SENSOR = "humidity_sensor"
 CONF_PM25_SENSOR = "pm25_sensor"
 CONF_PM10_SENSOR = "pm10_sensor"
 
+CONF_PROXY_MODE = "proxy_mode"
+CONF_FORWARD_FIRMWARE_CHECK = "forward_firmware_check"
+
 DEFAULT_STATION_NAME = "Home"
 DEFAULT_CITY_ID = "n000000"
 

@@ -8,6 +8,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     EntitySelector,
     EntitySelectorConfig,
     TextSelector,
@@ -15,6 +16,8 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     CONF_CITY_ID,
+    CONF_FORWARD_FIRMWARE_CHECK,
+    CONF_PROXY_MODE,
     CONF_STATION_NAME,
     CONF_TIMEZONE,
     CONF_WEATHER_ENTITY,
@@ -54,6 +57,16 @@ def _build_schema(defaults: dict[str, Any]) -> vol.Schema:
             schema[vol.Optional(key, default=existing)] = _sensor_selector()
         else:
             schema[vol.Optional(key)] = _sensor_selector()
+
+    schema[vol.Optional(
+        CONF_PROXY_MODE,
+        default=bool(defaults.get(CONF_PROXY_MODE, False)),
+    )] = BooleanSelector()
+    schema[vol.Optional(
+        CONF_FORWARD_FIRMWARE_CHECK,
+        default=bool(defaults.get(CONF_FORWARD_FIRMWARE_CHECK, False)),
+    )] = BooleanSelector()
+
     return vol.Schema(schema)
 
 

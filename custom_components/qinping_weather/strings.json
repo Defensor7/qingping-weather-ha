@@ -13,7 +13,9 @@
           "aqi_sensor": "AQI sensor (optional)",
           "humidity_sensor": "Humidity sensor (optional override)",
           "pm25_sensor": "PM2.5 sensor (optional)",
-          "pm10_sensor": "PM10 sensor (optional)"
+          "pm10_sensor": "PM10 sensor (optional)",
+          "proxy_mode": "Proxy mode — forward weather/AQI requests to the real qing.cleargrass.com",
+          "forward_firmware_check": "Forward firmware update checks to the real server"
         }
       }
     },
@@ -34,7 +36,9 @@
           "aqi_sensor": "AQI sensor",
           "humidity_sensor": "Humidity sensor",
           "pm25_sensor": "PM2.5 sensor",
-          "pm10_sensor": "PM10 sensor"
+          "pm10_sensor": "PM10 sensor",
+          "proxy_mode": "Proxy mode (forward to real qing.cleargrass.com)",
+          "forward_firmware_check": "Forward firmware update checks"
         }
       }
     }
