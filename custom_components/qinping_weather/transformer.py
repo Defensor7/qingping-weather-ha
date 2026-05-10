@@ -5,7 +5,9 @@ unchanged.
 """
 from __future__ import annotations
 
+import logging
 import time
+from collections import Counter
 from typing import Any
 
 from homeassistant.components.weather import (
@@ -17,7 +19,10 @@ from homeassistant.components.weather import (
 )
 from homeassistant.const import UnitOfSpeed
 from homeassistant.core import HomeAssistant, State
+from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import SpeedConverter
+
+_LOGGER = logging.getLogger(__name__)
 
 # Caiyun-style condition codes the QingSnow2App expects.
 _HA_TO_SKYCON: dict[str, str] = {
@@ -83,7 +88,12 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 async def _fetch_forecast(
     hass: HomeAssistant, weather_entity_id: str, forecast_type: str
 ) -> list[dict[str, Any]]:
-    """Call the weather.get_forecasts service and unwrap its response."""
+    """Call the weather.get_forecasts service and unwrap its response.
+
+    Returns [] (with a debug log line) if the entity does not advertise the
+    requested forecast type — this is normal for integrations like
+    HA-YandexWeather that only expose `hourly`.
+    """
     try:
         response = await hass.services.async_call(
             "weather",
@@ -92,12 +102,92 @@ async def _fetch_forecast(
             blocking=True,
             return_response=True,
         )
-    except Exception:  # pragma: no cover - HA service errors propagate as 500
+    except Exception as err:
+        _LOGGER.warning(
+            "weather.get_forecasts(%s, type=%s) failed: %s",
+            weather_entity_id,
+            forecast_type,
+            err,
+        )
         return []
     if not response:
         return []
     entity_response = response.get(weather_entity_id) or {}
-    return list(entity_response.get("forecast") or [])
+    forecast = list(entity_response.get("forecast") or [])
+    if not forecast:
+        _LOGGER.debug(
+            "weather.get_forecasts(%s, type=%s) returned no entries",
+            weather_entity_id,
+            forecast_type,
+        )
+    return forecast
+
+
+def _bucket_key_local_date(datetime_str: str | None) -> str | None:
+    if not datetime_str:
+        return None
+    parsed = dt_util.parse_datetime(datetime_str)
+    if parsed is None:
+        return None
+    return dt_util.as_local(parsed).date().isoformat()
+
+
+def _aggregate_hourly_to_daily(
+    hourly: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Roll up hourly forecast entries into per-day buckets.
+
+    Used as a fallback when the source entity exposes only `hourly` (e.g.
+    HA-YandexWeather). Yandex returns ~48h, which yields 2 daily entries.
+    """
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for entry in hourly:
+        key = _bucket_key_local_date(entry.get("datetime"))
+        if key is None:
+            continue
+        buckets.setdefault(key, []).append(entry)
+
+    out: list[dict[str, Any]] = []
+    for date_key in sorted(buckets):
+        items = buckets[date_key]
+        temps = [
+            float(e["temperature"]) for e in items if e.get("temperature") is not None
+        ]
+        humidities = [
+            float(e["humidity"]) for e in items if e.get("humidity") is not None
+        ]
+        wind_speeds = [
+            float(e["wind_speed"]) for e in items if e.get("wind_speed") is not None
+        ]
+        wind_bearings = [
+            e["wind_bearing"] for e in items if e.get("wind_bearing") is not None
+        ]
+        probabilities = [
+            float(e["precipitation_probability"])
+            for e in items
+            if e.get("precipitation_probability") is not None
+        ]
+        conditions = [e.get("condition") for e in items if e.get("condition")]
+
+        out.append(
+            {
+                "datetime": f"{date_key}T12:00:00",
+                "condition": Counter(conditions).most_common(1)[0][0]
+                if conditions
+                else "",
+                "temperature": max(temps) if temps else None,
+                "templow": min(temps) if temps else None,
+                "humidity": (sum(humidities) / len(humidities)) if humidities else None,
+                "wind_speed": (sum(wind_speeds) / len(wind_speeds))
+                if wind_speeds
+                else None,
+                "wind_bearing": wind_bearings[0] if wind_bearings else None,
+                "precipitation_probability": max(probabilities)
+                if probabilities
+                else None,
+            }
+        )
+    return out
 
 
 def _forecast_entry_weather(fc: dict[str, Any], ultraviolet: int) -> dict[str, Any]:
@@ -132,8 +222,31 @@ async def build_weather_forecast(
     *,
     uv_sensor: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Return a list of forecast entries in Qinping shape (top-level array)."""
-    forecasts = await _fetch_forecast(hass, weather_entity_id, forecast_type)
+    """Return a list of forecast entries in Qinping shape (top-level array).
+
+    For type="daily" the source entity may not advertise FORECAST_DAILY
+    (HA-YandexWeather only exposes hourly). The fallback chain is:
+        daily -> twice_daily -> aggregate(hourly).
+    """
+    forecasts: list[dict[str, Any]] = []
+    if forecast_type == "hourly":
+        forecasts = await _fetch_forecast(hass, weather_entity_id, "hourly")
+    else:  # "daily" or anything else — try hardest to produce daily data
+        forecasts = await _fetch_forecast(hass, weather_entity_id, "daily")
+        if not forecasts:
+            forecasts = await _fetch_forecast(
+                hass, weather_entity_id, "twice_daily"
+            )
+        if not forecasts:
+            hourly = await _fetch_forecast(hass, weather_entity_id, "hourly")
+            forecasts = _aggregate_hourly_to_daily(hourly)
+            if forecasts:
+                _LOGGER.debug(
+                    "Synthesised %d daily entries from hourly forecast for %s",
+                    len(forecasts),
+                    weather_entity_id,
+                )
+
     uv_value = _read_sensor_float(hass, uv_sensor)
     ultraviolet = int(round(uv_value)) if uv_value is not None else 0
     return [_forecast_entry_weather(fc, ultraviolet) for fc in forecasts]
