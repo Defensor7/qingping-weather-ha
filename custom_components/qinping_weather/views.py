@@ -4,12 +4,9 @@ Registered on Home Assistant's existing HTTP server. TLS is expected to be
 terminated by an upstream reverse proxy (e.g. the NGINX Proxy add-on with a
 customize.servers block matching `qing.cleargrass.com`).
 
-Endpoint shapes are based on:
-- ea/cgs2_decloud weather_server.py for /daily/weatherNow, /daily/locate,
-  /device/pairStatus, /cooperation/companies, /firmware/checkUpdate;
-- reverse-engineered LocationAPI::request{Weather,AQI}{FD,FH}List paths for
-  /daily/dailyForecasts and /daily/hourlyForecasts (top-level QJsonArray
-  response, dispatched by the `metric` query parameter).
+Endpoint shapes are pinned to the live qing.cleargrass.com responses captured
+via debug/qinping_capture.py --proxy. All weather-data endpoints (incl.
+forecasts) are wrapped as {"code":0, "data":<payload>}.
 
 Each view reads live options from hass.data on every request so an
 options-flow update takes effect without re-registering routes.
@@ -25,9 +22,10 @@ from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
 from .transformer import (
-    build_aqi_forecast_placeholder,
+    build_daily_weather_forecast,
+    build_hourly_weather_forecast,
     build_payloads,
-    build_weather_forecast,
+    build_server_now,
 )
 
 
@@ -61,34 +59,43 @@ class QinpingWeatherNowView(_QinpingViewBase):
         return web.json_response({"code": 0, "data": weather})
 
 
-class _QinpingForecastView(_QinpingViewBase):
-    forecast_type: str = ""
+class QinpingDailyForecastsView(_QinpingViewBase):
+    url = "/daily/dailyForecasts"
+    name = "qinping:daily_forecasts"
 
     async def get(self, request: web.Request) -> web.Response:
         metric = request.query.get("metric", "weather")
         if metric == "weather":
-            options = self._options
-            data = await build_weather_forecast(
-                self._hass,
-                options["weather_entity_id"],
-                self.forecast_type,
-                uv_sensor=options.get("uv_sensor"),
+            data = await build_daily_weather_forecast(
+                self._hass, self._options["weather_entity_id"]
             )
-        else:  # aqi or aqi_us
-            data = build_aqi_forecast_placeholder()
-        return web.json_response(data)
+        else:  # aqi / aqi_us — upstream itself returns empty for unsourced cities
+            data = []
+        return web.json_response({"code": 0, "data": data})
 
 
-class QinpingDailyForecastsView(_QinpingForecastView):
-    url = "/daily/dailyForecasts"
-    name = "qinping:daily_forecasts"
-    forecast_type = "daily"
-
-
-class QinpingHourlyForecastsView(_QinpingForecastView):
+class QinpingHourlyForecastsView(_QinpingViewBase):
     url = "/daily/hourlyForecasts"
     name = "qinping:hourly_forecasts"
-    forecast_type = "hourly"
+
+    async def get(self, request: web.Request) -> web.Response:
+        metric = request.query.get("metric", "weather")
+        if metric == "weather":
+            data = await build_hourly_weather_forecast(
+                self._hass, self._options["weather_entity_id"]
+            )
+        else:
+            data = []
+        return web.json_response({"code": 0, "data": data})
+
+
+class QinpingNowView(_QinpingViewBase):
+    """/daily/now -> server time. Device polls this for clock sync."""
+    url = "/daily/now"
+    name = "qinping:now"
+
+    async def get(self, request: web.Request) -> web.Response:
+        return web.json_response({"code": 0, "data": build_server_now()})
 
 
 class QinpingPairStatusView(_QinpingViewBase):
@@ -120,6 +127,7 @@ ALL_VIEW_CLASSES: tuple[type[_QinpingViewBase], ...] = (
     QinpingWeatherNowView,
     QinpingDailyForecastsView,
     QinpingHourlyForecastsView,
+    QinpingNowView,
     QinpingPairStatusView,
     QinpingCooperationView,
     QinpingFirmwareView,
