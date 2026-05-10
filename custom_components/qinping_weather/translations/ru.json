@@ -1,0 +1,36 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Qinping Local Weather",
+        "description": "Отдаёт погоду устройствам Qinping CGS2, читая её из weather-сущности Home Assistant. Требует, чтобы у HA был настроен HTTPS в секции http: — его сертификат и используется.",
+        "data": {
+          "weather_entity": "Источник погоды (weather entity)",
+          "port": "TLS-порт (устройство ждёт 443)",
+          "bind_host": "Адрес для bind",
+          "station_name": "Название станции на устройстве",
+          "city_id": "City ID (косметическое)",
+          "timezone": "Часовой пояс (пусто = из HA)"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Эта пара адрес+порт уже используется."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Qinping Local Weather",
+        "data": {
+          "weather_entity": "Источник погоды (weather entity)",
+          "port": "TLS-порт",
+          "bind_host": "Адрес для bind",
+          "station_name": "Название станции",
+          "city_id": "City ID",
+          "timezone": "Часовой пояс"
+        }
+      }
+    }
+  }
+}

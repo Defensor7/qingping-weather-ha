@@ -1,0 +1,36 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Qinping Local Weather",
+        "description": "Serve weather to Qinping CGS2 devices from a Home Assistant weather entity. Requires HTTPS to be configured under the http: integration — its certificate is reused.",
+        "data": {
+          "weather_entity": "Source weather entity",
+          "port": "TLS port (device expects 443)",
+          "bind_host": "Bind address",
+          "station_name": "Station name shown on the device",
+          "city_id": "City ID (cosmetic)",
+          "timezone": "Timezone (blank = HA default)"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This bind address and port are already in use."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Qinping Local Weather",
+        "data": {
+          "weather_entity": "Source weather entity",
+          "port": "TLS port",
+          "bind_host": "Bind address",
+          "station_name": "Station name",
+          "city_id": "City ID",
+          "timezone": "Timezone"
+        }
+      }
+    }
+  }
+}
